@@ -29,6 +29,7 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
   final GlobalKey<_FavoritesViewState> _favoritesKey =
       GlobalKey<_FavoritesViewState>();
   final List<Post> _posts = [];
+  final ScrollController _feedScrollController = ScrollController();
   final int _previewMaxChars = 160;
   String _token = defaultTokenT;
   BackendType _backend = BackendType.t;
@@ -39,6 +40,8 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
   bool _isLoading = false;
   bool _isFetchingMore = false;
   bool _hasMore = true;
+  bool _showBottomBar = true;
+  bool _showScrollToTop = false;
   int _page = 1;
   String? _errorMessage;
   BackendConfig get _activeBackend =>
@@ -55,7 +58,15 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
   @override
   void initState() {
     super.initState();
+    _feedScrollController.addListener(_handleFeedScroll);
     _initialize();
+  }
+
+  @override
+  void dispose() {
+    _feedScrollController.removeListener(_handleFeedScroll);
+    _feedScrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _initialize() async {
@@ -99,6 +110,12 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
   }
 
   bool _onPostScrollNotification(ScrollNotification notification) {
+    if (notification is ScrollUpdateNotification) {
+      final delta = notification.scrollDelta;
+      if (delta != null && delta.abs() > 2) {
+        _setBottomBarVisible(delta <= 0);
+      }
+    }
     final atBottom = notification.metrics.extentAfter == 0;
     final isPullUp = notification is OverscrollNotification
         ? notification.overscroll > 0
@@ -108,6 +125,29 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
       _fetchPosts(page: _page + 1, append: true, showLoadingIndicator: false);
     }
     return false;
+  }
+
+  void _handleFeedScroll() {
+    final shouldShow = _feedScrollController.offset > 400;
+    if (_showScrollToTop == shouldShow) return;
+    setState(() {
+      _showScrollToTop = shouldShow;
+    });
+  }
+
+  void _scrollToTop() {
+    _feedScrollController.animateTo(
+      0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  void _setBottomBarVisible(bool visible) {
+    if (_showBottomBar == visible) return;
+    setState(() {
+      _showBottomBar = visible;
+    });
   }
 
   Future<void> _fetchPosts({
@@ -184,13 +224,30 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
               backendKey: _backend.name,
               supportsComment: _activeBackend.supportsComment,
               showInlineActions: true,
+              onBottomBarVisibilityChanged: _setBottomBarVisible,
             ),
-      floatingActionButton: _tab == MainTab.feed &&
-              _activeBackend.supportsPost
-          ? FloatingActionButton(
-              onPressed: _openComposePage,
-              tooltip: '发帖',
-              child: const Icon(Icons.edit),
+      floatingActionButton: _tab == MainTab.feed
+          ? Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_showScrollToTop)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: FloatingActionButton.small(
+                      heroTag: 'scroll_to_top',
+                      onPressed: _scrollToTop,
+                      tooltip: '回顶部',
+                      child: const Icon(Icons.arrow_upward),
+                    ),
+                  ),
+                if (_activeBackend.supportsPost)
+                  FloatingActionButton(
+                    heroTag: 'compose_post',
+                    onPressed: _openComposePage,
+                    tooltip: '发帖',
+                    child: const Icon(Icons.edit),
+                  ),
+              ],
             )
           : null,
       bottomNavigationBar: _buildBottomBar(isWide),
@@ -295,8 +352,10 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
       child: NotificationListener<ScrollNotification>(
         onNotification: _onPostScrollNotification,
         child: ListView.builder(
+          controller: _feedScrollController,
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(16),
+          cacheExtent: 800,
           itemCount: _posts.length + (_isFetchingMore ? 1 : 0),
           itemBuilder: (context, index) {
             if (index >= _posts.length) {
@@ -392,17 +451,35 @@ class _LatestPostsPageState extends State<LatestPostsPage> {
   }
 
   Widget _buildBottomBar(bool isWide) {
-    return NavigationBar(
-      selectedIndex: _tab.index,
-      onDestinationSelected: (index) {
-        setState(() {
-          _tab = MainTab.values[index];
-        });
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 200),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      transitionBuilder: (child, animation) {
+        final offsetAnimation = Tween<Offset>(
+          begin: const Offset(0, 1),
+          end: Offset.zero,
+        ).animate(animation);
+        return SlideTransition(
+          position: offsetAnimation,
+          child: FadeTransition(opacity: animation, child: child),
+        );
       },
-      destinations: const [
-        NavigationDestination(icon: Icon(Icons.home), label: '最新'),
-        NavigationDestination(icon: Icon(Icons.star), label: '关注'),
-      ],
+      child: _showBottomBar
+          ? NavigationBar(
+              key: const ValueKey('bottom_bar'),
+              selectedIndex: _tab.index,
+              onDestinationSelected: (index) {
+                setState(() {
+                  _tab = MainTab.values[index];
+                });
+              },
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.home), label: '最新'),
+                NavigationDestination(icon: Icon(Icons.star), label: '关注'),
+              ],
+            )
+          : const SizedBox(key: ValueKey('bottom_bar_hidden')),
     );
   }
 
@@ -1574,6 +1651,7 @@ class FavoritesView extends StatefulWidget {
     required this.backendKey,
     required this.supportsComment,
     required this.showInlineActions,
+    this.onBottomBarVisibilityChanged,
   });
 
   final String token;
@@ -1581,6 +1659,7 @@ class FavoritesView extends StatefulWidget {
   final String backendKey;
   final bool supportsComment;
   final bool showInlineActions;
+  final ValueChanged<bool>? onBottomBarVisibilityChanged;
 
   @override
   State<FavoritesView> createState() => _FavoritesViewState();
@@ -1718,6 +1797,16 @@ class _FavoritesViewState extends State<FavoritesView> {
     list[index] = list[index].copyWith(attention: next);
   }
 
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (notification is ScrollUpdateNotification) {
+      final delta = notification.scrollDelta;
+      if (delta != null && delta.abs() > 2) {
+        widget.onBottomBarVisibilityChanged?.call(delta <= 0);
+      }
+    }
+    return false;
+  }
+
   Future<void> _openDetail(Post post) async {
     final updated = await Navigator.of(context).push<Post>(
       MaterialPageRoute(
@@ -1853,79 +1942,86 @@ class _FavoritesViewState extends State<FavoritesView> {
       );
     }
     if (_posts.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: const [
-          SizedBox(height: 120),
-          Center(child: Text('暂无收藏')),
-        ],
+      return NotificationListener<ScrollNotification>(
+        onNotification: _handleScrollNotification,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: const [
+            SizedBox(height: 120),
+            Center(child: Text('暂无收藏')),
+          ],
+        ),
       );
     }
-    return ListView.builder(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.all(16),
-      itemCount: _posts.length,
-      itemBuilder: (context, index) {
-        final post = _posts[index];
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Card(
-            elevation: 0,
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => _openDetail(post),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Stack(
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TagPidRow(tags: post.tags, pid: post.pid),
-                        const SizedBox(height: 8),
-                        MarkdownContent(
-                          text: truncateMarkdown(post.text, 200),
-                          maxImageHeight: 220,
-                          token: widget.token,
-                          baseUrl: widget.baseUrl,
-                          currentPostId: post.pid,
-                          onOpenPost: _openDetail,
-                          selectable: false,
-                        ),
-                        const SizedBox(height: 12),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            if (post.timestamp != null)
+    return NotificationListener<ScrollNotification>(
+      onNotification: _handleScrollNotification,
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        cacheExtent: 800,
+        itemCount: _posts.length,
+        itemBuilder: (context, index) {
+          final post = _posts[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Card(
+              elevation: 0,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => _openDetail(post),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Stack(
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          TagPidRow(tags: post.tags, pid: post.pid),
+                          const SizedBox(height: 8),
+                          MarkdownContent(
+                            text: truncateMarkdown(post.text, 200),
+                            maxImageHeight: 220,
+                            token: widget.token,
+                            baseUrl: widget.baseUrl,
+                            currentPostId: post.pid,
+                            onOpenPost: _openDetail,
+                            selectable: false,
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              if (post.timestamp != null)
+                                Text(
+                                  formatTimestamp(post.timestamp!),
+                                  style: Theme.of(context).textTheme.labelSmall,
+                                ),
                               Text(
-                                formatTimestamp(post.timestamp!),
+                                '评论 ${post.commentCount}',
                                 style: Theme.of(context).textTheme.labelSmall,
                               ),
-                            Text(
-                              '评论 ${post.commentCount}',
-                              style: Theme.of(context).textTheme.labelSmall,
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    Positioned(
-                      top: -6,
-                      right: -6,
-                      child: AttentionButton(
-                        isActive: post.attention ?? false,
-                        isLoading: _togglingAttention.contains(post.pid),
-                        onPressed: () => _togglePostAttention(post),
+                            ],
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                      Positioned(
+                        top: -6,
+                        right: -6,
+                        child: AttentionButton(
+                          isActive: post.attention ?? false,
+                          isLoading: _togglingAttention.contains(post.pid),
+                          onPressed: () => _togglePostAttention(post),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

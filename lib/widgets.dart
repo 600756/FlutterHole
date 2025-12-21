@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:photo_view/photo_view.dart';
 
 import 'models.dart';
@@ -97,6 +98,7 @@ class MarkdownContent extends StatelessWidget {
     final markdownBody = MarkdownBody(
       data: text,
       styleSheet: style,
+      onTapLink: (label, href, title) => _openLink(context, href),
       imageBuilder: (uri, title, alt) {
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -148,6 +150,19 @@ class MarkdownContent extends StatelessWidget {
         builder: (context) => ImageViewerPage(imageUrl: uri.toString()),
       ),
     );
+  }
+
+  Future<void> _openLink(BuildContext context, String? href) async {
+    if (href == null) return;
+    final uri = Uri.tryParse(href);
+    if (uri == null) return;
+    final launched =
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('无法打开链接: $href')),
+      );
+    }
   }
 }
 
@@ -237,6 +252,19 @@ class TagPidRow extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _openLink(BuildContext context, String? href) async {
+    if (href == null) return;
+    final uri = Uri.tryParse(href);
+    if (uri == null) return;
+    final launched =
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('无法打开链接: $href')),
+      );
+    }
   }
 }
 
